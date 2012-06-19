@@ -89,33 +89,7 @@ def ndcg_score(p, n, k):
     return np.nan_to_num(dcg(rels) / dcg(irels))
 
 
-def load_features(path):
-    pos_feats = []
-    val_feats = []
-    neg_feats = []
-    neg_paths = glob.glob(path + '/0/*.png')
-    random.shuffle(neg_paths)
-    val_paths = neg_paths[500:1000]
-    neg_paths = neg_paths[:500]
-    # Neg
-    for x in neg_paths:
-        neg_feats.append(compute_hog(x))
-    neg_feats = np.asfarray(neg_feats)
-    # Val
-    for x in val_paths:
-        val_feats.append(compute_hog(x))
-    val_feats = np.asfarray(val_feats)
-    # Pos
-    pos_paths = glob.glob(path + '/1/*.png')
-    random.shuffle(pos_paths)
-    pos_paths = pos_paths[:501]
-    for x in pos_paths:
-        pos_feats.append(compute_hog(x))
-    pos_feats = np.asfarray(pos_feats)
-    return pos_feats, val_feats, neg_feats, pos_paths, val_paths, neg_paths
-
-
-def compute_paths(path, num_pos_train=1000, num_neg_train=5000, num_pos_test=1000, num_neg_test=1000):
+def compute_paths(path, num_pos_train=1000, num_neg_train=1000, num_pos_test=1000, num_neg_test=1000):
     neg_paths = glob.glob(path + '/0/*.png')
     random.shuffle(neg_paths)
     neg_train_paths = neg_paths[:num_neg_train]
@@ -149,8 +123,6 @@ def _compute_validation_scores(pos_test_paths, neg_test_paths, cs, ps=None, ns=N
 
 
 def identify_descriminative_patches(path):
-    # In the patch path, train an exemplar SVM classifier for each patch and
-    # keep the patches that best separate the pos/neg patches
     pos_train_paths, neg_train_paths, pos_test_paths, neg_test_paths = compute_paths(path)
     with timer('Negative Training Features'):
         neg_train_feats = np.asfarray(list(compute_features(neg_train_paths)))
@@ -167,9 +139,9 @@ def identify_descriminative_patches(path):
     prev_pos_ind = 0
     prev_neg_ind = 0
     ns = ps = None
-    for x in range(num_iters):
-        num_pos_test = (x + 1) * len(pos_test_paths) / num_iters
-        num_neg_test = (x + 1) * len(neg_test_paths) / num_iters
+    for x, (num_pos_test, num_neg_test) in enumerate([(50, 50), (100, 100), (200, 200), (len(pos_test_paths), len(neg_test_paths))]):
+        #num_pos_test = (x + 1) * len(pos_test_paths) / num_iters
+        #num_neg_test = (x + 1) * len(neg_test_paths) / num_iters
         num_exemplars = len(pos_train_paths) / 2 ** (x + 1)
         print('num_pos_test:%d num_neg_test:%d num_exemplars:%d' % (num_pos_test, num_neg_test, num_exemplars))
         try:
