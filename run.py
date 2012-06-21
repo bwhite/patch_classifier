@@ -36,6 +36,55 @@ def ndcg_score(p, n, k):
     return np.nan_to_num(dcg(rels) / dcg(irels))
 
 
+class BadExemplar(Exception):
+    """The exemplar cannot meet the required performance characteristics"""
+
+
+def precision_threshold(p, n, target=.9, k=200):
+    p = np.asfarray(p)
+    n = np.asfarray(n)
+    gts = (np.argsort(np.hstack([p, n]))[::-1][:k] < p.size).astype(np.int)
+    confs = np.sort(np.hstack([p, n]))[::-1][:k]
+    p, r, t = sklearn.metrics.precision_recall_curve(gts, confs)
+    p = p[:-1]
+    r = r[:-1]
+    if target > np.max(p):
+        print('Warning: BadExemplar max(p) = %f' % np.max(p))
+        raise BadExemplar
+    pinds = (p >= target).nonzero()[0]
+    ind = pinds[np.argmax(r[pinds])]
+    precision, recall, threshold = p[ind], r[ind], t[ind]
+    preds = (confs >= threshold).astype(np.int)
+    tp = fp = tn = fn = 0
+    for pred, gt in zip(preds, gts):
+        if gt:
+            if pred:
+                tp +=1
+            else:
+                fn += 1
+        else:
+            if pred:
+                fp += 1
+            else:
+                tn += 1
+    precision_check = tp / float(tp + fp)
+    recall_check = tp / float(tp + fn)
+    print((precision, precision_check))
+    print((recall, recall_check))
+    assert precision_check == precision
+    assert recall_check == recall
+    print('p:%f r:%f t:%f' % (precision, recall, threshold))
+    return threshold
+
+
+def calibrate_exemplars(ps, ns):
+    for num, (p, n) in enumerate(zip(ps, ns)):
+        try:
+            yield precision_threshold(p, n), num
+        except BadExemplar:
+            pass
+
+
 def compute_paths(path, num_pos_train=2000, num_neg_train=50000, num_pos_test=10000, num_neg_test=10000):
     neg_paths = glob.glob(path + '/0/*.png')
     random.shuffle(neg_paths)
@@ -77,7 +126,7 @@ def compute_decision_funcs(data):
     return outs
 
 
-def _compute_validation_scores(pos_test_paths, neg_test_paths, cs, ps=None, ns=None, k=100):
+def _compute_validation_scores(pos_test_paths, neg_test_paths, cs, ps=None, ns=None, k=200):
     if ps is None:
         ps = [[] for x in cs]
     if ns is None:
@@ -118,30 +167,32 @@ def identify_descriminative_patches(path, exemplar_path=None):
     prev_neg_ind = 0
     ns = ps = None
     #(1000, 1000), (2000, 2000), (4000, 4000),
-    for x, (num_pos_test, num_neg_test) in enumerate([(len(pos_test_paths), len(neg_test_paths))]):
+    for run_iter, (num_pos_test, num_neg_test) in enumerate([(len(pos_test_paths), len(neg_test_paths))]):
         #num_pos_test = (x + 1) * len(pos_test_paths) / num_iters
         #num_neg_test = (x + 1) * len(neg_test_paths) / num_iters
-        num_exemplars = len(pos_train_paths)  # / 2 ** (x + 1)
-        print('num_pos_test:%d num_neg_test:%d num_exemplars:%d' % (num_pos_test, num_neg_test, num_exemplars))
+        #num_exemplars = len(pos_train_paths)  # / 2 ** (run_iter + 1)
+        print('num_pos_test:%d num_neg_test:%d' % (num_pos_test, num_neg_test))
         try:
-            os.makedirs('exemplars/%.3d/worst/' % x)
-            os.makedirs('exemplars/%.3d/best/' % x)
+            os.makedirs('exemplars/%.3d/worst/' % run_iter)
+            os.makedirs('exemplars/%.3d/best/' % run_iter)
         except OSError:
             pass
         with timer('compute_validation_scores'):
             scores, ps, ns = _compute_validation_scores(pos_test_paths[prev_pos_ind:num_pos_test],
                                                         neg_test_paths[prev_neg_ind:num_neg_test],
                                                         cs, ps, ns)
+            ts, inds = zip(*calibrate_exemplars(ps, ns))
+            scores, cs, c_paths = zip(*[(scores[x], cs[x], c_paths[x]) for x in inds])
         prev_pos_ind = num_pos_test
         prev_neg_ind = num_neg_test
-        k = max(1, min(100, len(scores) / 2))
+        k = max(1, min(200, len(scores) / 2))
         scores_inds = np.argsort(scores)
         for y in range(k):
-            shutil.copy(c_paths[scores_inds[y]], 'exemplars/%.3d/worst/%.3d-%f.png' % (x, y, scores[scores_inds[y]]))
-            shutil.copy(c_paths[scores_inds[-(y + 1)]], 'exemplars/%.3d/best/%.3d-%f.png' % (x, y, scores[scores_inds[-(y + 1)]]))
+            shutil.copy(c_paths[scores_inds[y]], 'exemplars/%.3d/worst/%.3d-%f.png' % (run_iter, y, scores[scores_inds[y]]))
+            shutil.copy(c_paths[scores_inds[-(y + 1)]], 'exemplars/%.3d/best/%.3d-%f.png' % (run_iter, y, scores[scores_inds[-(y + 1)]]))
         cs, c_paths, ps, ns = zip(*[(cs[z], c_paths[z], ps[z], ns[z])
-                                    for z in scores_inds[-num_exemplars:]])
-    return cs, c_paths, pos_test_paths, neg_test_paths, ps, ns
+                                    for z in scores_inds])
+    return cs, c_paths, pos_test_paths, neg_test_paths, ps, ns, ts
 
 
 def single_exemplar(path, exemplar_path):
@@ -156,11 +207,11 @@ def single_exemplar(path, exemplar_path):
     except OSError:
         pass
     output_coeff(cs[0])
-    for x in range(100):
-        shutil.copy(pos_test_paths[pos_inds[x]], 'exemplars/pos/worst-%.2d-%f.png' % (x, pos_scores[pos_inds[x]]))
-        shutil.copy(pos_test_paths[pos_inds[-(x + 1)]], 'exemplars/pos/best-%.2d-%f.png' % (x, pos_scores[pos_inds[-(x + 1)]]))
-        shutil.copy(neg_test_paths[neg_inds[x]], 'exemplars/neg/worst-%.2d-%f.png' % (x, neg_scores[neg_inds[x]]))
-        shutil.copy(neg_test_paths[neg_inds[-(x + 1)]], 'exemplars/neg/best-%.2d-%f.png' % (x, neg_scores[neg_inds[-(x + 1)]]))
+    for x in range(200):
+        shutil.copy(pos_test_paths[pos_inds[x]], 'exemplars/pos/worst-%.3d-%f.png' % (x, pos_scores[pos_inds[x]]))
+        shutil.copy(pos_test_paths[pos_inds[-(x + 1)]], 'exemplars/pos/best-%.3d-%f.png' % (x, pos_scores[pos_inds[-(x + 1)]]))
+        shutil.copy(neg_test_paths[neg_inds[x]], 'exemplars/neg/worst-%.3d-%f.png' % (x, neg_scores[neg_inds[x]]))
+        shutil.copy(neg_test_paths[neg_inds[-(x + 1)]], 'exemplars/neg/best-%.3d-%f.png' % (x, neg_scores[neg_inds[-(x + 1)]]))
 
 
 def output_coeff(c):
@@ -182,12 +233,28 @@ def train_exemplar(features, labels):
     return c.fit(features, labels)
 
 
-def sliding_hog(exemplars, image, feature, sbin=4):
-    f = feature(cv2.resize(image, (10, 10)), ravel=False)
-    print(f.shape)
-    print(f.reshape(f.size / 31, 31).shape)
-    sz = np.array(image.shape) / sbin
-    print sz
+def sliding_hog(exemplars, image, feature, sbin=4, size=32, cells=6):
+    exemplar_coefs = np.ascontiguousarray([x.coef_.ravel() for x in exemplars])
+    exemplar_intercepts = np.ascontiguousarray([x.intercept_[0] for x in exemplars])
+    print(exemplar_intercepts.shape)
+    print(exemplar_coefs.shape)
+    #d = lambda b: np.dot(c.coef_, b) + c.intercept_
+    with timer('Hog full'):
+        f = feature(image, ravel=False)
+    with timer('Slide/Predict Everywhere'):
+        runs = 0
+        for x in range(f.shape[0] - cells):
+            for y in range(f.shape[0] - cells):
+                fs = np.ascontiguousarray(f[x:x + cells, y:y + cells, :].ravel())
+                (np.dot(exemplar_coefs, fs) + exemplar_intercepts)
+                runs += 1
+        print('Runs:%d' % runs)
+
+    #f = feature(cv2.resize(image, (, 32)), ravel=False)
+    print(np.sum(f, axis=2).shape)
+    f = feature(image[:35, :35, :], ravel=False)[:6, :6, :]
+    print(np.sum(f, axis=2))
+
     return f
     
 
@@ -196,13 +263,13 @@ if __name__ == '__main__':
     POOL = multiprocessing.Pool()
     #single_exemplar('boxes', 'mx.png')
     #write_boxes
-    #out = identify_descriminative_patches('boxes')
+    out = identify_descriminative_patches('boxes')
     #with open('out.pkl', 'w') as fp:
     #    pickle.dump(out, fp, -1)
     #cluster_images('boxes')
     #with open('out.pkl') as fp:
     #    cs, c_paths, pos_test_paths, neg_test_paths, ps, ns = pickle.load(fp)
-    cs = []
-    f = sliding_hog(cs, cv2.imread('/home/brandyn/playground/aladdin_data_cropped/person/0/00000008.jpg'), HOG)
+    #cs = []
+    #f = sliding_hog(cs, cv2.imread('/home/brandyn/playground/aladdin_data_cropped/person/0/00000008.jpg'), HOG)
     #    c_paths, s = pickle.load(fp)
     #cluster_exemplars(c_paths, s)
