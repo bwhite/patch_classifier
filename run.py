@@ -36,25 +36,7 @@ def ndcg_score(p, n, k):
     return np.nan_to_num(dcg(rels) / dcg(irels))
 
 
-class BadExemplar(Exception):
-    """The exemplar cannot meet the required performance characteristics"""
-
-
-def precision_threshold(p, n, target=.9, k=200):
-    p = np.asfarray(p)
-    n = np.asfarray(n)
-    gts = (np.argsort(np.hstack([p, n]))[::-1][:k] < p.size).astype(np.int)
-    confs = np.sort(np.hstack([p, n]))[::-1][:k]
-    p, r, t = sklearn.metrics.precision_recall_curve(gts, confs)
-    p = p[:-1]
-    r = r[:-1]
-    if target > np.max(p):
-        print('Warning: BadExemplar max(p) = %f' % np.max(p))
-        raise BadExemplar
-    pinds = (p >= target).nonzero()[0]
-    ind = pinds[np.argmax(r[pinds])]
-    precision, recall, threshold = p[ind], r[ind], t[ind]
-    preds = (confs >= threshold).astype(np.int)
+def compute_pr(preds, gts):
     tp = fp = tn = fn = 0
     for pred, gt in zip(preds, gts):
         if gt:
@@ -67,12 +49,40 @@ def precision_threshold(p, n, target=.9, k=200):
                 fp += 1
             else:
                 tn += 1
-    precision_check = tp / float(tp + fp)
-    recall_check = tp / float(tp + fn)
-    print((precision, precision_check))
-    print((recall, recall_check))
-    assert precision_check == precision
-    assert recall_check == recall
+    p = tp / float(tp + fp)
+    r = tp / float(tp + fn)
+    return p, r
+
+
+class BadExemplar(Exception):
+    """The exemplar cannot meet the required performance characteristics"""
+
+
+def precision_threshold(p, n, target=.95, k=200):
+    p = np.asfarray(p)
+    n = np.asfarray(n)
+    gts = (np.argsort(np.hstack([p, n]))[::-1][:k] < p.size).astype(np.int)
+    confs = np.sort(np.hstack([p, n]))[::-1][:k]
+    try:
+        p, r, t = sklearn.metrics.precision_recall_curve(gts, confs)
+    except ValueError:
+        print('Warning: BadExemplar has no positives')
+        raise BadExemplar
+    p = p[:-1]
+    r = r[:-1]
+    if target > np.max(p):
+        print('Warning: BadExemplar max(p) = %f' % np.max(p))
+        raise BadExemplar
+    pinds = (p >= target).nonzero()[0]
+    ind = pinds[np.argmax(r[pinds])]
+    precision, recall, threshold = p[ind], r[ind], t[ind]
+    preds = (confs >= threshold).astype(np.int)
+    if 1:
+        precision_check, recall_check = compute_pr(preds, gts)
+        print((precision, precision_check))
+        print((recall, recall_check))
+        assert precision_check == precision
+        assert recall_check == recall
     print('p:%f r:%f t:%f' % (precision, recall, threshold))
     return threshold
 
@@ -85,7 +95,7 @@ def calibrate_exemplars(ps, ns):
             pass
 
 
-def compute_paths(path, num_pos_train=2000, num_neg_train=50000, num_pos_test=10000, num_neg_test=10000):
+def compute_paths(path, num_pos_train=5000, num_neg_train=50000, num_pos_test=10000, num_neg_test=10000):
     neg_paths = glob.glob(path + '/0/*.png')
     random.shuffle(neg_paths)
     neg_train_paths = neg_paths[:num_neg_train]
@@ -98,8 +108,6 @@ def compute_paths(path, num_pos_train=2000, num_neg_train=50000, num_pos_test=10
 
 
 def compute_features(paths):
-    #for x in paths:
-    #    yield compute_hog(x)
     return POOL.imap(compute_hog, paths)
 
 
@@ -153,6 +161,7 @@ def identify_descriminative_patches(path, exemplar_path=None):
     pos_train_paths, neg_train_paths, pos_test_paths, neg_test_paths = compute_paths(path)
     if exemplar_path:
         pos_train_paths = [exemplar_path]
+    print('neg')
     with timer('Negative Training Features'):
         neg_train_feats = np.asfarray(list(compute_features(neg_train_paths)))
     cs = []
@@ -190,13 +199,13 @@ def identify_descriminative_patches(path, exemplar_path=None):
         for y in range(k):
             shutil.copy(c_paths[scores_inds[y]], 'exemplars/%.3d/worst/%.3d-%f.png' % (run_iter, y, scores[scores_inds[y]]))
             shutil.copy(c_paths[scores_inds[-(y + 1)]], 'exemplars/%.3d/best/%.3d-%f.png' % (run_iter, y, scores[scores_inds[-(y + 1)]]))
-        cs, c_paths, ps, ns = zip(*[(cs[z], c_paths[z], ps[z], ns[z])
-                                    for z in scores_inds])
+        #cs, c_paths, ps, ns, ts = zip(*[(cs[z], c_paths[z], ps[z], ns[z], ts[z])
+        #                                for z in scores_inds])
     return cs, c_paths, pos_test_paths, neg_test_paths, ps, ns, ts
 
 
 def single_exemplar(path, exemplar_path):
-    cs, c_paths, pos_test_paths, neg_test_paths, ps, ns = identify_descriminative_patches(path, exemplar_path)
+    cs, c_paths, pos_test_paths, neg_test_paths, ps, ns, ts = identify_descriminative_patches(path, exemplar_path)
     pos_scores = ps[0]
     neg_scores = ns[0]
     pos_inds = np.argsort(pos_scores)
@@ -233,43 +242,89 @@ def train_exemplar(features, labels):
     return c.fit(features, labels)
 
 
-def sliding_hog(exemplars, image, feature, sbin=4, size=32, cells=6):
+def save_sliding_exemplars(exemplars, c_paths, ts):
     exemplar_coefs = np.ascontiguousarray([x.coef_.ravel() for x in exemplars])
-    exemplar_intercepts = np.ascontiguousarray([x.intercept_[0] for x in exemplars])
+    exemplar_intercepts = np.ascontiguousarray([x.intercept_[0] - y for x, y in zip(exemplars, ts)])
+    test_f = np.random.random((exemplar_coefs.shape[1]))
+    for x, y, z, t in zip(exemplar_coefs, exemplar_intercepts, exemplars, ts):
+        pred_raw = np.dot(x, test_f) + y
+        pred = z.decision_function(test_f)[0][0] - t
+        print((pred_raw, pred))
+        assert np.abs(pred_raw - pred) < .000001
+    with open('exemplars_sliding.pkl', 'w') as fp:
+        pickle.dump((exemplar_coefs, exemplar_intercepts, c_paths), fp, -1)
+
+
+def sliding_hog(exemplar_coefs, exemplar_intercepts, c_paths, image, feature, sbin=4, size=32, cells=6):
+    image = cv2.resize(image, (image.shape[1] / 4, image.shape[1] / 4))
+    with timer('Hog full'):
+        f = feature(image, ravel=False)
+    out_preds = set()
+    try:
+        os.makedirs('predictions/')
+    except OSError:
+        pass
+    #xcoords, ycoords = np.meshgrid(range(image.shape[1]), range(image.shape[0]))
+
+    #def cells_to_pixels(x, y):
+    #    tl_x = x * 
+    #xcoords = np.clip(xcoords / sbin, 0, f.shape[1] - 1)
+    #ycoords = np.clip(ycoords / sbin, 0, f.shape[0] - 1)
+    runs = 0
+    with timer('Slide/Predict Everywhere'):
+        for x in range(0, f.shape[0] - cells, 1):
+            for y in range(0, f.shape[1] - cells, 1):
+                fs = np.ascontiguousarray(f[x:x + cells, y:y + cells, :].ravel())
+                preds = (np.dot(exemplar_coefs, fs) + exemplar_intercepts >= 0).nonzero()[0]
+                runs += 1
+                for pred in preds:
+                    out_preds.add(pred)
+                    #cv2.imwrite('predictions/%.5d-w-%f.png' % (pred, random.random()), image_block)
+        print('Runs: %d' % runs)
+    for pred in out_preds:
+        shutil.copy(c_paths[pred], 'predictions/%.5d-s.png' % pred)
+
+
+def sliding_hog2(exemplar_coefs, exemplar_intercepts, c_paths, image, feature, sbin=4, size=32, cells=6):
+    image = cv2.resize(image, (image.shape[1] / 4, image.shape[1] / 4))
     print(exemplar_intercepts.shape)
     print(exemplar_coefs.shape)
     #d = lambda b: np.dot(c.coef_, b) + c.intercept_
-    with timer('Hog full'):
-        f = feature(image, ravel=False)
-    with timer('Slide/Predict Everywhere'):
-        runs = 0
-        for x in range(f.shape[0] - cells):
-            for y in range(f.shape[0] - cells):
-                fs = np.ascontiguousarray(f[x:x + cells, y:y + cells, :].ravel())
-                (np.dot(exemplar_coefs, fs) + exemplar_intercepts)
+    #with timer('Hog full'):
+    #    f = feature(image, ravel=False)
+    out_preds = set()
+    try:
+        os.makedirs('predictions/')
+    except OSError:
+        pass
+    runs = 0
+    for scale in range(1):
+        with timer('Slide/Predict Everywhere'):
+            for image_block, sim in imfeat.BlockGenerator(image, imfeat.CoordGeneratorRect, output_size=(32, 32), step_delta=(4, 4)):
+                f = feature(image_block)
+                preds = (np.dot(exemplar_coefs, f) + exemplar_intercepts >= 0).nonzero()[0]
                 runs += 1
-        print('Runs:%d' % runs)
-
-    #f = feature(cv2.resize(image, (, 32)), ravel=False)
-    print(np.sum(f, axis=2).shape)
-    f = feature(image[:35, :35, :], ravel=False)[:6, :6, :]
-    print(np.sum(f, axis=2))
-
-    return f
-    
+                for pred in preds:
+                    out_preds.add(pred)
+                    cv2.imwrite('predictions/%.5d-w-%f.png' % (pred, random.random()), image_block)
+        print('Runs: %d' % runs)
+        image = cv2.resize(image, (image.shape[1] / 2, image.shape[2] / 2))
+    for pred in out_preds:
+        shutil.copy(c_paths[pred], 'predictions/%.5d-s.png' % pred)
 
 
 if __name__ == '__main__':
     POOL = multiprocessing.Pool()
     #single_exemplar('boxes', 'mx.png')
-    #write_boxes
-    out = identify_descriminative_patches('boxes')
+    #write_boxes()
+    #out = identify_descriminative_patches('/aladdin_data_cropped/boxes')
     #with open('out.pkl', 'w') as fp:
     #    pickle.dump(out, fp, -1)
     #cluster_images('boxes')
+    #cs, c_paths, pos_test_paths, neg_test_paths, ps, ns, ts = out
     #with open('out.pkl') as fp:
-    #    cs, c_paths, pos_test_paths, neg_test_paths, ps, ns = pickle.load(fp)
-    #cs = []
-    #f = sliding_hog(cs, cv2.imread('/home/brandyn/playground/aladdin_data_cropped/person/0/00000008.jpg'), HOG)
-    #    c_paths, s = pickle.load(fp)
-    #cluster_exemplars(c_paths, s)
+    #    cs, c_paths, pos_test_paths, neg_test_paths, ps, ns, ts = pickle.load(fp)
+    #save_sliding_exemplars(cs, c_paths, ts)
+    exemplar_coefs, exemplar_intercepts, c_paths = pickle.load(open('exemplars_sliding.pkl'))
+    f = sliding_hog(exemplar_coefs, exemplar_intercepts, c_paths, cv2.imread('target.jpg'), HOG)
+    #f = sliding_hog2(exemplar_coefs, exemplar_intercepts, c_paths, cv2.imread('target.jpg'), HOG)

@@ -69,9 +69,9 @@ def remove_tiling(frame):
 
 
 def write_boxes():
-    for label, frame in vidfeat.load_label_frames('/home/brandyn/playground/aladdin_data_cropped/person/'):
+    for label, frame in vidfeat.load_label_frames('/aladdin_data_cropped/person/'):
         if label == 1:  # Some of the people have a tiling artifact on the bottom
             frame = remove_tiling(frame)
         boxes = sample_boxes(frame.shape[:2])
-        save_boxes('boxes/%d' % label, frame, boxes)
+        save_boxes('/aladdin_data_cropped/boxes/%d' % label, frame, boxes)
         print(label)
