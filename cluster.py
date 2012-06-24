@@ -8,6 +8,7 @@ import scipy as sp
 import scipy.cluster
 from sklearn.cluster import DBSCAN
 import cPickle as pickle
+import distpy
 
 
 def cluster_images(path, hog):
@@ -73,5 +74,37 @@ def cluster_exemplars(c_paths, s):
     for cluster_num, nodes in l.items():
         d = 'clusters/%.5d-%d/' % (cluster_num, len(nodes))
         os.makedirs(d)
+        for node in nodes:
+            shutil.copy(c_paths[node], d + '%d.png' % node)
+
+
+def cluster_exemplars2(c_paths, ps, ts):
+    ps = np.array(ps)
+    print('c_paths:%s ps:%s ts:%s' % (len(c_paths), ps.shape, len(ts)))
+    # Threshold ps
+    #preds = np.ascontiguousarray(np.packbits((ts <= ps.T).astype(np.uint8), axis=0).T)
+    preds = np.ascontiguousarray((ts <= ps.T).astype(np.float64).T)
+    print('preds:%s' % (preds.shape,))
+    s = sp.spatial.distance.cdist(preds, preds, 'cosine')
+    print(s.shape)
+    for x in range(s.shape[0]):
+        s[x, x] = 0
+    #s = distpy.Hamming().cdist(preds, preds)
+    print(s.shape)
+    s = sp.spatial.distance.squareform(s)
+    print(s.shape)
+    l = sp.cluster.hierarchy.single(s)
+    print(l.shape)
+    clusts = scipy.cluster.hierarchy.fcluster(l, len(c_paths) / 4, criterion='maxclust')
+    print(len(clusts))
+    l = {}
+    for x, y in enumerate(clusts):
+        l.setdefault(y, []).append(x)
+    for cluster_num, nodes in l.items():
+        d = 'clusters/%.5d-%d/' % (cluster_num, len(nodes))
+        try:
+            os.makedirs(d)
+        except OSError:
+            pass
         for node in nodes:
             shutil.copy(c_paths[node], d + '%d.png' % node)

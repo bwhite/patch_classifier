@@ -11,6 +11,7 @@ import multiprocessing
 import contextlib
 import cPickle as pickle
 from data import write_boxes
+from cluster import cluster_exemplars2
 
 HOG = imfeat.HOGLatent(sbin=4, blocks=1)
 
@@ -95,7 +96,7 @@ def calibrate_exemplars(ps, ns):
             pass
 
 
-def compute_paths(path, num_pos_train=5000, num_neg_train=50000, num_pos_test=10000, num_neg_test=10000):
+def compute_paths(path, num_pos_train=2500, num_neg_train=50000, num_pos_test=10000, num_neg_test=10000):
     neg_paths = glob.glob(path + '/0/*.png')
     random.shuffle(neg_paths)
     neg_train_paths = neg_paths[:num_neg_train]
@@ -191,7 +192,7 @@ def identify_descriminative_patches(path, exemplar_path=None):
                                                         neg_test_paths[prev_neg_ind:num_neg_test],
                                                         cs, ps, ns)
             ts, inds = zip(*calibrate_exemplars(ps, ns))
-            scores, cs, c_paths = zip(*[(scores[x], cs[x], c_paths[x]) for x in inds])
+            scores, cs, c_paths, ps, ns = zip(*[(scores[x], cs[x], c_paths[x], ps[x], ns[x]) for x in inds])
         prev_pos_ind = num_pos_test
         prev_neg_ind = num_neg_test
         k = max(1, min(200, len(scores) / 2))
@@ -216,6 +217,21 @@ def single_exemplar(path, exemplar_path):
     except OSError:
         pass
     output_coeff(cs[0])
+    for x in range(200):
+        shutil.copy(pos_test_paths[pos_inds[x]], 'exemplars/pos/worst-%.3d-%f.png' % (x, pos_scores[pos_inds[x]]))
+        shutil.copy(pos_test_paths[pos_inds[-(x + 1)]], 'exemplars/pos/best-%.3d-%f.png' % (x, pos_scores[pos_inds[-(x + 1)]]))
+        shutil.copy(neg_test_paths[neg_inds[x]], 'exemplars/neg/worst-%.3d-%f.png' % (x, neg_scores[neg_inds[x]]))
+        shutil.copy(neg_test_paths[neg_inds[-(x + 1)]], 'exemplars/neg/best-%.3d-%f.png' % (x, neg_scores[neg_inds[-(x + 1)]]))
+
+
+def single_exemplar_existing(pos_scores, neg_scores, pos_test_paths, neg_test_paths):
+    pos_inds = np.argsort(pos_scores)
+    neg_inds = np.argsort(neg_scores)
+    try:
+        os.makedirs('exemplars/pos')
+        os.makedirs('exemplars/neg')
+    except OSError:
+        pass
     for x in range(200):
         shutil.copy(pos_test_paths[pos_inds[x]], 'exemplars/pos/worst-%.3d-%f.png' % (x, pos_scores[pos_inds[x]]))
         shutil.copy(pos_test_paths[pos_inds[-(x + 1)]], 'exemplars/pos/best-%.3d-%f.png' % (x, pos_scores[pos_inds[-(x + 1)]]))
@@ -255,8 +271,13 @@ def save_sliding_exemplars(exemplars, c_paths, ts):
         pickle.dump((exemplar_coefs, exemplar_intercepts, c_paths), fp, -1)
 
 
+def cell_tl_yx(row, col, height, width, sbin):
+    y = min((row) * sbin, height)
+    x = min((col) * sbin, width)
+    return y, x
+
 def sliding_hog(exemplar_coefs, exemplar_intercepts, c_paths, image, feature, sbin=4, size=32, cells=6):
-    image = cv2.resize(image, (image.shape[1] / 4, image.shape[1] / 4))
+    image = cv2.resize(image, (image.shape[1] / 4, image.shape[0] / 4))
     with timer('Hog full'):
         f = feature(image, ravel=False)
     out_preds = set()
@@ -264,29 +285,38 @@ def sliding_hog(exemplar_coefs, exemplar_intercepts, c_paths, image, feature, sb
         os.makedirs('predictions/')
     except OSError:
         pass
-    #xcoords, ycoords = np.meshgrid(range(image.shape[1]), range(image.shape[0]))
-
-    #def cells_to_pixels(x, y):
-    #    tl_x = x * 
-    #xcoords = np.clip(xcoords / sbin, 0, f.shape[1] - 1)
-    #ycoords = np.clip(ycoords / sbin, 0, f.shape[0] - 1)
     runs = 0
+    print(image.shape)
+    mask = np.zeros(image.shape[:2])
+    image_boxes = np.array(image)
     with timer('Slide/Predict Everywhere'):
-        for x in range(0, f.shape[0] - cells, 1):
-            for y in range(0, f.shape[1] - cells, 1):
+        for x in range(0, f.shape[0] - cells, 2):
+            for y in range(0, f.shape[1] - cells, 2):
+                tl_y, tl_x = cell_tl_yx(x, y, image.shape[0], image.shape[1], sbin)
+                #print((tl_x, tl_y, tl_x + 32, tl_y + 32))
                 fs = np.ascontiguousarray(f[x:x + cells, y:y + cells, :].ravel())
+                #fs2 = HOG(image[tl_y:tl_y + 32, tl_x:tl_x + 32, :])
                 preds = (np.dot(exemplar_coefs, fs) + exemplar_intercepts >= 0).nonzero()[0]
+                mask[tl_y:tl_y+32, tl_x:tl_x + 32] += len(preds)
+                #preds2 = (np.dot(exemplar_coefs, fs2) + exemplar_intercepts >= 0).nonzero()[0]
+                #print((tl_x, tl_y, tl_x + 32, tl_y + 32))
+                #print(preds)
+                #print(preds2)
                 runs += 1
+                if preds.size > 3:
+                    cv2.rectangle(image_boxes, (tl_x, tl_y), (tl_x + 32, tl_y + 32), (min((preds.size - 3) * 50, 255), 0, 0))
                 for pred in preds:
                     out_preds.add(pred)
-                    #cv2.imwrite('predictions/%.5d-w-%f.png' % (pred, random.random()), image_block)
+                    cv2.imwrite('predictions/%.5d-w-%f.png' % (pred, random.random()),
+                                image[tl_y:tl_y + 32, tl_x:tl_x + 32, :])
         print('Runs: %d' % runs)
     for pred in out_preds:
         shutil.copy(c_paths[pred], 'predictions/%.5d-s.png' % pred)
+    cv2.imwrite('predictions/mask.png', image_boxes)
 
 
 def sliding_hog2(exemplar_coefs, exemplar_intercepts, c_paths, image, feature, sbin=4, size=32, cells=6):
-    image = cv2.resize(image, (image.shape[1] / 4, image.shape[1] / 4))
+    image = cv2.resize(image, (image.shape[1] / 4, image.shape[0] / 4))
     print(exemplar_intercepts.shape)
     print(exemplar_coefs.shape)
     #d = lambda b: np.dot(c.coef_, b) + c.intercept_
@@ -322,9 +352,12 @@ if __name__ == '__main__':
     #    pickle.dump(out, fp, -1)
     #cluster_images('boxes')
     #cs, c_paths, pos_test_paths, neg_test_paths, ps, ns, ts = out
-    #with open('out.pkl') as fp:
-    #    cs, c_paths, pos_test_paths, neg_test_paths, ps, ns, ts = pickle.load(fp)
+    with open('out.pkl') as fp:
+        cs, c_paths, pos_test_paths, neg_test_paths, ps, ns, ts = pickle.load(fp)
+    ps = cluster_exemplars2(c_paths, ps, ts)
+    #ind, = [x for x, y in enumerate(c_paths) if '003-' in y]
+    #single_exemplar_existing(ps[ind], ns[ind], pos_test_paths, neg_test_paths)
     #save_sliding_exemplars(cs, c_paths, ts)
-    exemplar_coefs, exemplar_intercepts, c_paths = pickle.load(open('exemplars_sliding.pkl'))
-    f = sliding_hog(exemplar_coefs, exemplar_intercepts, c_paths, cv2.imread('target.jpg'), HOG)
+    #exemplar_coefs, exemplar_intercepts, c_paths = pickle.load(open('exemplars_sliding.pkl'))
+    #f = sliding_hog(exemplar_coefs, exemplar_intercepts, c_paths, cv2.imread('target.jpg'), HOG)
     #f = sliding_hog2(exemplar_coefs, exemplar_intercepts, c_paths, cv2.imread('target.jpg'), HOG)
