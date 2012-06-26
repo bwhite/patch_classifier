@@ -77,25 +77,37 @@ def cluster_exemplars(c_paths, s):
         for node in nodes:
             shutil.copy(c_paths[node], d + '%d.png' % node)
 
-
 def cluster_exemplars2(c_paths, ps, ts):
     ps = np.array(ps)
     print('c_paths:%s ps:%s ts:%s' % (len(c_paths), ps.shape, len(ts)))
     # Threshold ps
-    #preds = np.ascontiguousarray(np.packbits((ts <= ps.T).astype(np.uint8), axis=0).T)
-    preds = np.ascontiguousarray((ts <= ps.T).astype(np.float64).T)
+    preds = np.ascontiguousarray(np.packbits((ts <= ps.T).astype(np.uint8), axis=0).T)
+    #preds = np.ascontiguousarray((ts <= ps.T).astype(np.float64).T)
     print('preds:%s' % (preds.shape,))
-    s = sp.spatial.distance.cdist(preds, preds, 'cosine')
+    s = np.asarray([[np.sum(np.unpackbits(np.bitwise_and(x, y))) for x in preds] for y in preds])
+    #s = distpy.Hamming().cdist(preds, preds)
+    #s = sp.spatial.distance.cdist(preds, preds, 'cosine')
     print(s.shape)
+    mx = np.max(s)
     for x in range(s.shape[0]):
         s[x, x] = 0
-    #s = distpy.Hamming().cdist(preds, preds)
+    for x in range(s.shape[0]):
+        y = np.argmax(s[x, :])
+        d = 'cluster_pairs/'
+        try:
+            os.makedirs(d)
+        except OSError:
+            pass
+        shutil.copy(c_paths[x], d + '%.5d-a.png' % (x))
+        shutil.copy(c_paths[y], d + '%.5d-b-%d.png' % (x, s[x, y]))
+
+    return
     print(s.shape)
     s = sp.spatial.distance.squareform(s)
     print(s.shape)
-    l = sp.cluster.hierarchy.single(s)
+    l = sp.cluster.hierarchy.complete(s)
     print(l.shape)
-    clusts = scipy.cluster.hierarchy.fcluster(l, len(c_paths) / 4, criterion='maxclust')
+    clusts = scipy.cluster.hierarchy.fcluster(l, 5, criterion='maxclust')
     print(len(clusts))
     l = {}
     for x, y in enumerate(clusts):

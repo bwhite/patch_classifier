@@ -59,7 +59,7 @@ class BadExemplar(Exception):
     """The exemplar cannot meet the required performance characteristics"""
 
 
-def precision_threshold(p, n, target=.95, k=200):
+def precision_threshold(p, n, target=.90, k=200):
     p = np.asfarray(p)
     n = np.asfarray(n)
     gts = (np.argsort(np.hstack([p, n]))[::-1][:k] < p.size).astype(np.int)
@@ -96,7 +96,7 @@ def calibrate_exemplars(ps, ns):
             pass
 
 
-def compute_paths(path, num_pos_train=2500, num_neg_train=50000, num_pos_test=10000, num_neg_test=10000):
+def compute_paths(path, num_pos_train=5000, num_neg_train=50000, num_pos_test=50000, num_neg_test=50000):
     neg_paths = glob.glob(path + '/0/*.png')
     random.shuffle(neg_paths)
     neg_train_paths = neg_paths[:num_neg_train]
@@ -347,14 +347,14 @@ if __name__ == '__main__':
     POOL = multiprocessing.Pool()
     #single_exemplar('boxes', 'mx.png')
     #write_boxes()
-    #out = identify_descriminative_patches('/aladdin_data_cropped/boxes')
-    #with open('out.pkl', 'w') as fp:
-    #    pickle.dump(out, fp, -1)
+    out = identify_descriminative_patches('/aladdin_data_cropped/boxes')
+    with open('out.pkl', 'w') as fp:
+        pickle.dump(out, fp, -1)
     #cluster_images('boxes')
     #cs, c_paths, pos_test_paths, neg_test_paths, ps, ns, ts = out
-    with open('out.pkl') as fp:
-        cs, c_paths, pos_test_paths, neg_test_paths, ps, ns, ts = pickle.load(fp)
-    ps = cluster_exemplars2(c_paths, ps, ts)
+    #with open('out.pkl') as fp:
+    #    cs, c_paths, pos_test_paths, neg_test_paths, ps, ns, ts = pickle.load(fp)
+    #ps = cluster_exemplars2(c_paths, ps, ts)
     #ind, = [x for x, y in enumerate(c_paths) if '003-' in y]
     #single_exemplar_existing(ps[ind], ns[ind], pos_test_paths, neg_test_paths)
     #save_sliding_exemplars(cs, c_paths, ts)
