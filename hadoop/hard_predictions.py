@@ -46,7 +46,7 @@ class Reducer(object):
         best_preds = []
         for preds in predss:
             for pred in preds:
-                if len(preds) >= self.max_hard:
+                if len(best_preds) >= self.max_hard:
                     heapq.heappushpop(best_preds, pred)
                 else:
                     heapq.heappush(best_preds, pred)
