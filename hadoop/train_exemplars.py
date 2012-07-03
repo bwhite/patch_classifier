@@ -7,7 +7,7 @@ import os
 class Mapper(object):
 
     def __init__(self):
-        neg_feats = np.vstack([x[1] for x in hadoopy.readtb(os.environ['NEG_FEATS'])])
+        neg_feats = np.vstack([x[1].ravel() for x in hadoopy.readtb(os.environ['NEG_FEATS'])])
         self.neg_feats_one_pos = np.vstack([np.zeros_like(neg_feats[0]), neg_feats])
         self.labels = np.hstack([np.ones(1), np.zeros(len(neg_feats))])
 

@@ -18,6 +18,16 @@ import random
 
 logging.basicConfig(level=logging.INFO)
 
+LAUNCH_HOLDER = None
+def toggle_launch():
+    global LAUNCH_HOLDER
+    if LAUNCH_HOLDER is None:
+        LAUNCH_HOLDER = hadoopy.launch, hadoopy.launch_frozen, hadoopy.launch_local
+        hadoopy.launch = hadoopy.launch_frozen = hadoopy.launch_local = lambda *x, **y: {}
+    else:
+        hadoopy.launch, hadoopy.launch_frozen, hadoopy.launch_local = LAUNCH_HOLDER
+        LAUNCH_HOLDER = None
+
 
 def cleanup_image(image):
     image = remove_tiling(image)
@@ -91,10 +101,9 @@ def remove_tiling(frame):
     return frame
 
 
-
-
 def workflow(hdfs_input, hdfs_output):
     # TRAINING
+    toggle_launch()
     # Compute random negative feature samples (enough to easily fit in memory)
     hadoopy.launch_frozen(hdfs_input + '0-tr', hdfs_output + 'neg', 'compute_exemplar_features.py')
     # Compute random positive exemplars (enough to easily fit in memory)  (TODO: Next step is to prefilter at this point)
@@ -105,15 +114,18 @@ def workflow(hdfs_input, hdfs_output):
     hadoopy.launch_frozen(hdfs_output + 'neg', hdfs_output + 'neg_sample', 'random_uniform.py', cmdenvs=['SAMPLE_SIZE=10000'])
 
     # Train initial classifiers and serialize them
-    hadoopy.launch_frozen(hdfs_output + 'pos_sample', hdfs_output + 'exemplars-0', 'train_exemplars.py', cmdenvs=['NEG_FEATS=%s' % (hadoopy.abspath(hdfs_output + 'neg_sample'))])
+    exemplar_out = hadoopy.abspath(hdfs_output + 'exemplars-0')
+    hadoopy.launch_frozen(hdfs_output + 'pos_sample', exemplar_out, 'train_exemplars.py', cmdenvs=['NEG_FEATS=%s' % (hadoopy.abspath(hdfs_output + 'neg_sample'))])
     
     # Train initial classifier using sampled positives and negatives, find hard negatives for each positive
     #hadoopy.launch_frozen(hdfs_input + '0-v', hdfs_output + 'exemplars-14', 'train_exemplars_hard.py', cmdenvs=['MAX_HARD=1000',
     #'EXEMPLARS=%s' % hadoopy.abspath(hdfs_output + 'exemplars-0')], num_reducers=10)
     # CALIBRATION
+    exemplar_jobconf = 'EXEMPLARS=%s' % exemplar_out
     # Predict on pos/neg sets
-    hadoopy.launch_frozen(hdfs_output + '0-v', hdfs_output + 'exemplars-0', 'hard_predictions.py', cmdenvs=['NEG_FEATS=%s' % (hadoopy.abspath(hdfs_output + 'neg_sample'))])
-    hadoopy.launch_frozen(hdfs_output + '0-v', hdfs_output + 'exemplars-0', 'hard_predictions.py', cmdenvs=['NEG_FEATS=%s' % (hadoopy.abspath(hdfs_output + 'neg_sample'))])
+    toggle_launch()
+    hadoopy.launch_frozen(hdfs_input + '1-v', hdfs_output + 'val_pos', 'hard_predictions.py', cmdenvs=['NEG_FEATS=%s' % (hadoopy.abspath(hdfs_output + 'neg_sample')), exemplar_jobconf, 'MAX_HARD=200'])
+    hadoopy.launch_frozen(hdfs_input + '0-v', hdfs_output + 'val_neg', 'hard_predictions.py', cmdenvs=['NEG_FEATS=%s' % (hadoopy.abspath(hdfs_output + 'neg_sample')), exemplar_jobconf, 'MAX_HARD=200'])
     # Calibrate threshold using pos/neg validation set #1
 
     # CLUSTERING
@@ -132,15 +144,13 @@ def main():
     print(len(neg_local_inputs))
     print(len(pos_local_inputs))
     train_ind = int(.5 * len(neg_local_inputs))
-    setup_data(neg_local_inputs[:train_ind], hdfs_input + '0-tr')
-    setup_data(neg_local_inputs[train_ind:], hdfs_input + '0-v')
+    #setup_data(neg_local_inputs[:train_ind], hdfs_input + '0-tr')
+    #setup_data(neg_local_inputs[train_ind:], hdfs_input + '0-v')
     train_ind = int(.5 * len(pos_local_inputs))
-    setup_data(pos_local_inputs[:train_ind], hdfs_input + '1-tr')
-    setup_data(pos_local_inputs[train_ind:], hdfs_input + '1-v')
+    #setup_data(pos_local_inputs[:train_ind], hdfs_input + '1-tr')
+    #setup_data(pos_local_inputs[train_ind:], hdfs_input + '1-v')
     
-    #setup_data(local_input + '0', hdfs_input + '0')
-    #setup_data(local_input + '1', hdfs_input + '1')
-    hdfs_output = 'exemplarbank/output/%s/' % '1340929620.410318'
+    hdfs_output = 'exemplarbank/output/%s/' % '1341256276.081' #time.time()
     workflow(hdfs_input, hdfs_output)
 
 

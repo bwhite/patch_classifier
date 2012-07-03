@@ -3,7 +3,19 @@ import cv2
 import numpy as np
 
 
-compute = imfeat.HOGLatent(sbin=4, blocks=1)
+PATCH_SIZE = 40
+CELLS = 8
+SBIN = 4
+compute = imfeat.HOGLatent(sbin=SBIN, blocks=1)
+
+
+def compute_patch(image):
+    assert image.shape[0] == image.shape[1]
+    assert image.shape[0] % PATCH_SIZE == 0
+    while image.shape[0] != PATCH_SIZE:
+        image = cv2.resize(image, (image.shape[1] / 2, image.shape[0] / 2))
+    f = compute(image, ravel=False)
+    return np.ascontiguousarray(f[1:-1, 1:-1, :].ravel())
 
 
 def _image_patch_features_base(image, inner_func, scales=6, normalize_box=False):
@@ -12,38 +24,49 @@ def _image_patch_features_base(image, inner_func, scales=6, normalize_box=False)
         if scale > 1:
             height, width = np.array(image.shape[:2]) / 2
             image = image[:height * 2, :width * 2, :]
+            if min(width, height) < 1:
+                return
             image = cv2.resize(image, (width, height))
         if image is None:  # NOTE(brandyn): It is too small
             return
         if normalize_box:
             norm_vec = 1. / np.asfarray([image.shape[0], image.shape[1], image.shape[0], image.shape[1]])
         else:
-            norm_vec = np.ones(4, dtype=np.int)
-        norm_vec *= scale
+            norm_vec = np.ones(4, dtype=np.int) * scale
+        any_boxes = False
         for box, f in inner_func(image):
+            any_boxes = True
             yield norm_vec * box, f
+        if not any_boxes:
+            return
 
 
-def image_patch_features_random(image, patch_size=32, density=1, **kw):
+def image_patch_features_random(image, density=1, **kw):
 
     def _inner(image):
-        for x in _sample_boxes(image.shape[:2], density=density, patch_size=patch_size):
-            yield x, compute(image[x[0]:x[2], x[1]:x[3], :])
-    return _image_patch_features_base(image, **kw)
+        for x in _sample_boxes(image.shape[:2], density=density, patch_size=PATCH_SIZE):
+            yield x, compute_patch(image[x[0]:x[2], x[1]:x[3], :])
+    return _image_patch_features_base(image, _inner, **kw)
 
 
-def image_patch_features_dense(image, cell_skip=6, patch_size=32, cells=6, sbin=4, **kw):
+def image_patch_features_dense(image, cell_skip=6, **kw):
 
     def _inner(image):
         f = compute(image, ravel=False)
-        for row in range(0, f.shape[0] - cells, cell_skip):
-            for col in range(0, f.shape[1] - cells, cell_skip):
-                y = min(row * sbin, image.shape[0])
-                x = min(col * sbin, image.shape[1])
-                fs = np.ascontiguousarray(f[x:x + cells, y:y + cells, :].ravel())
-                yield np.array([y, x, y + patch_size, x + patch_size]), fs
+        for row in range(0, f.shape[0] - CELLS, cell_skip):
+            for col in range(0, f.shape[1] - CELLS, cell_skip):
+                y = (row) * SBIN
+                x = (col) * SBIN
+                fs = np.ascontiguousarray(f[row + 1:row + CELLS - 1, col + 1:col + CELLS - 1, :].ravel())
+                yield np.array([y, x, y + PATCH_SIZE, x + PATCH_SIZE]), fs
 
-    return _image_patch_features_base(image, **kw)
+    return _image_patch_features_base(image, _inner, **kw)
+
+
+def test_patchs(patch_func, image):
+    for box, f in patch_func(image):
+        f2 = compute_patch(image[box[0]:box[2], box[1]:box[3], :])
+        np.testing.assert_equal(f, f2)
 
 
 def _sample_boxes(image_size, density, patch_size):
@@ -72,3 +95,8 @@ def _sample_boxes(image_size, density, patch_size):
         return np.vstack(out)
     except ValueError:
         return np.array([], dtype=np.int).reshape(0, 4)
+
+if __name__ == '__main__':
+    im = cv2.imread('lena.ppm')
+    test_patchs(image_patch_features_random, im)
+    test_patchs(image_patch_features_dense, im)
