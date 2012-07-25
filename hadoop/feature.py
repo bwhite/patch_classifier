@@ -34,7 +34,7 @@ def _image_patch_features_base(image, inner_func, scales=6, normalize_box=False)
         else:
             norm_vec = np.ones(4, dtype=np.int) * scale
         any_boxes = False
-        for box, f in inner_func(image):
+        for box, f in inner_func(image, scale):
             any_boxes = True
             yield norm_vec * box, f
         if not any_boxes:
@@ -43,18 +43,19 @@ def _image_patch_features_base(image, inner_func, scales=6, normalize_box=False)
 
 def image_patch_features_random(image, density=1, **kw):
 
-    def _inner(image):
+    def _inner(image, scale):
         for x in _sample_boxes(image.shape[:2], density=density, patch_size=PATCH_SIZE):
             yield x, compute_patch(image[x[0]:x[2], x[1]:x[3], :])
     return _image_patch_features_base(image, _inner, **kw)
 
 
-def image_patch_features_dense(image, cell_skip=6, **kw):
+def image_patch_features_dense(image, cell_skip=32, **kw):
 
-    def _inner(image):
+    def _inner(image, scale):
+        cur_cell_skip = cell_skip / scale ** 2
         f = compute(image, ravel=False)
-        for row in range(0, f.shape[0] - CELLS, cell_skip):
-            for col in range(0, f.shape[1] - CELLS, cell_skip):
+        for row in range(0, f.shape[0] - CELLS, cur_cell_skip):
+            for col in range(0, f.shape[1] - CELLS, cur_cell_skip):
                 y = (row) * SBIN
                 x = (col) * SBIN
                 fs = np.ascontiguousarray(f[row + 1:row + CELLS - 1, col + 1:col + CELLS - 1, :].ravel())

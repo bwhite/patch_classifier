@@ -32,12 +32,35 @@ except ImportError:
     pass
 
 
+class LeakyPriorityQueue(object):
+
+    def __init__(self, capacity):
+        self._sorted_keys = [float('inf')]  # (random)
+        self._key_values = {}  # [key] = item
+        self._capacity = capacity
+
+    def add(self, key, item):
+        if key < self._sorted_keys[-1]:
+            bisect.insort(self._sorted_keys, key)
+            self._key_values[key] = item
+        if len(self._sorted_keys) > self._capacity:
+            try:
+                del self._key_values[self._sorted_keys[-1]]
+            except KeyError:  # Ignore inf
+                pass
+            self._sorted_keys = self._sorted_keys[:-1]
+
+    def items(self):
+        return self._key_values.iteritems()
+
+    def values(self):
+        return self._key_values.itervalues()
+
+
 class Mapper(object):
 
     def __init__(self):
-        self._sorted_rands = [float('inf')]  # (random)
-        self._key_vals = {}  # [random] = (key, point)
-        self._sample_size = int(os.environ['SAMPLE_SIZE'])
+        self._pq = LeakyPriorityQueue(int(os.environ['SAMPLE_SIZE']))
 
     def map(self, key, value):
         """Take in points and output a random sample
@@ -46,16 +69,7 @@ class Mapper(object):
             key: Opaque (can be anything)
             value: Opaque (can be anything)
         """
-        cur_rand = random.random()
-        if cur_rand < self._sorted_rands[-1]:
-            bisect.insort(self._sorted_rands, cur_rand)
-            self._key_vals[cur_rand] = (key, value)
-        if len(self._sorted_rands) > self._sample_size:
-            try:
-                del self._key_vals[self._sorted_rands[-1]]
-            except KeyError:  # Ignore inf
-                pass
-            self._sorted_rands = self._sorted_rands[:-1]
+        self._pq.add(random.random(), (key, value))
 
     def close(self):
         """
@@ -64,18 +78,13 @@ class Mapper(object):
             key: Random float
             value: (Input key, Input value)
         """
-        for rand in self._sorted_rands:
-            try:
-                yield rand, self._key_vals[rand]
-            except KeyError:  # Ignore inf
-                pass
+        return self._pq.items()
 
 
 class Reducer(object):
 
     def __init__(self):
-        self._sample_size = int(os.environ['SAMPLE_SIZE'])
-        self._num_output = 0
+        self._pq = LeakyPriorityQueue(int(os.environ['SAMPLE_SIZE']))
 
     def reduce(self, rand, key_vals):
         """Take in a series of points and output a random sample
@@ -90,11 +99,11 @@ class Reducer(object):
             value: Input value
         """
         for kv in key_vals:
-            if self._sample_size <= self._num_output:
-                break
-            self._num_output += 1
-            yield kv
+            self._pq.add(rand, kv)
+
+    def close(self):
+        return self._pq.values()
+        
 
 if __name__ == "__main__":
-    if hadoopy.run(Mapper, Reducer):
-        hadoopy.print_doc_quit(__doc__)
+    hadoopy.run(Mapper, Reducer)

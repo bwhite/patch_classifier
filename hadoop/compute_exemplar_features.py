@@ -1,10 +1,9 @@
 import hadoopy
 import imfeat
-import cv2
 import numpy as np
-import os
 import feature
 import numpy as np
+
 
 class Mapper(object):
 
@@ -13,8 +12,8 @@ class Mapper(object):
 
     def map(self, image_id, image_binary):
         image = imfeat.image_fromstring(image_binary)
-        for box, f in feature.image_patch_features_dense(image):
-            yield (image_id, box), f
+        for box, f in feature.image_patch_features_dense(image, normalize_box=True):
+            yield (image_id, box.tolist()), f
 
 
 if __name__ == '__main__':
