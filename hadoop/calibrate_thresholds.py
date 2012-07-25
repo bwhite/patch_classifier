@@ -64,8 +64,8 @@ def fpr_threshold(p, n, target=.0001, k=200):
     if 1:
         preds = (confs >= thresh).astype(np.int)
         fpr_check, tpr_check = compute_fpr_tpr(preds, gts)
-        assert fpr_check == fpr
-        assert tpr_check == tpr
+        if fpr_check != fpr or tpr_check != tpr:
+            raise ValueError('FPR/TPR incorrect[%s][%s][%s][%s]' % (fpr_check, fpr, tpr_check, tpr))
     score = np.sum(gts[:k])
     print('fpr:%f tpr:%f thresh:%f score@%d:%d' % (fpr, tpr, thresh, k, score))
     return thresh, score
@@ -82,7 +82,8 @@ class Reducer(object):
         data = [None, None, None]
         for input_type, value in values:
             data[input_type] = value
-        assert len([x for x in data if x is None]) == 0
+        if len([x for x in data if x is None]) != 0:
+            raise ValueError('Reducer did not get all necessary parts!')
         exemplar, pos, neg = data
         # Compute threshold and output new exemplar
         try:

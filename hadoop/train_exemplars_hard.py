@@ -51,15 +51,18 @@ class Reducer(object):
         pos_feat = 0
         for val_type, value in values:
             if val_type:  # Positive exemplar
-                assert pos_feat == 0
+                if pos_feat != 0:
+                    raise ValueError('Multiple positive features sent to reducer')
                 self.neg_feats_one_pos[0, :] = value
                 pos_feat += 1
             else:
-                assert hard_feats < self.max_hard
+                if hard_feats >= self.max_hard:
+                    raise ValueError('Too many negative features sent to reducer')
                 self.neg_feats_one_pos[1 + self.num_neg_feats + hard_feats] = value[-1]
                 hard_feats += 1
         print('[%r]PosFeat[%d] HardFeats[%d] NegFeats[%d]' % (key, pos_feat, hard_feats, self.num_neg_feats))
-        assert pos_feat
+        if pos_feat != 1:
+            raise ValueError('No positive features sent to reducer')
         num_feats = 1 + self.num_neg_feats + hard_feats
         c = sklearn.svm.LinearSVC(verbose=10, C=10**20).fit(self.neg_feats_one_pos[:num_feats, :], self.labels[:num_feats])
         yield [key[0], key[1], 0.], (c.coef_.ravel(), float(c.intercept_[0]))

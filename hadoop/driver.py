@@ -121,7 +121,7 @@ def initial_train(hdfs_input, hdfs_output):
     hadoopy.launch_frozen(hdfs_input + '1-tr', hdfs_output + 'pos', 'compute_exemplar_features.py', remove_output=True)
     # Randomly sample positives to produce an initial set of exemplars
     hadoopy.launch_frozen(hdfs_output + 'pos', hdfs_output + 'pos_sample0', 'random_uniform.py',
-                          cmdenvs=['SAMPLE_SIZE=10000'], remove_output=True)
+                          cmdenvs=['SAMPLE_SIZE=1000'], remove_output=True)
     hadoopy.launch_frozen(hdfs_output + 'pos_sample0', hdfs_output + 'pos_sample', 'split.py', num_reducers=100, remove_output=True)
     # Randomly sample negatives to produce a set that all exemplars will use initially
     hadoopy.launch_frozen(hdfs_output + 'neg', hdfs_output + 'neg_sample', 'random_uniform.py',
@@ -150,8 +150,7 @@ def hard_train(hdfs_input, hdfs_output):
                     image_box_fns.setdefault(image_id2, []).append((box2, [image_id, box, score]))
             pickle.dump(image_box_fns, fp, -1)
         del image_box_fns
-    toggle_launch()
-    #_inner()  # TODO rem
+    _inner()
     hadoopy.launch_frozen(hdfs_input + '0-tr', hdfs_output + 'hard_neg_clip', 'clip_boxes.py', files=['image_box_fns.pkl'], remove_output=True, cmdenvs=['TYPE=feature'])
     hadoopy.launch_frozen([hdfs_output + 'pos_sample',
                            hdfs_output + 'hard_neg_clip'], hdfs_output + 'exemplars-1', 'train_exemplars_hard.py',
@@ -198,7 +197,6 @@ def cluster(hdfs_input, hdfs_output):
 
 
 def workflow(hdfs_input, hdfs_output):
-    toggle_launch()
     initial_train(hdfs_input, hdfs_output)
     hard_train(hdfs_input, hdfs_output)
     calibrate(hdfs_input, hdfs_output)
@@ -257,7 +255,6 @@ def main():
     train_ind = int(.25 * len(neg_local_inputs))
     #setup_data(neg_local_inputs[:train_ind], hdfs_input + '0-tr')
     #setup_data(neg_local_inputs[train_ind:], hdfs_input + '0-v')
-    train_ind = int(.25 * len(pos_local_inputs))
     #setup_data(pos_local_inputs[:train_ind], hdfs_input + '1-tr')
     #setup_data(pos_local_inputs[train_ind:], hdfs_input + '1-v')
     hdfs_output = 'exemplarbank/output/%s/' % '1341790878.92'  # time.time()

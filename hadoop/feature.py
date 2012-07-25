@@ -10,10 +10,8 @@ compute = imfeat.HOGLatent(sbin=SBIN, blocks=1)
 
 
 def compute_patch(image):
-    assert image.shape[0] == image.shape[1]
-    assert image.shape[0] % PATCH_SIZE == 0
-    while image.shape[0] != PATCH_SIZE:
-        image = cv2.resize(image, (image.shape[1] / 2, image.shape[0] / 2))
+    if not (image.shape[0] == image.shape[1] == PATCH_SIZE):
+        raise ValueError('Bad patch shape[%s]' % str(image.shape))
     f = compute(image, ravel=False)
     return np.ascontiguousarray(f[1:-1, 1:-1, :].ravel())
 
@@ -52,7 +50,7 @@ def image_patch_features_random(image, density=1, **kw):
 def image_patch_features_dense(image, cell_skip=32, **kw):
 
     def _inner(image, scale):
-        cur_cell_skip = cell_skip / scale ** 2
+        cur_cell_skip = max(1, cell_skip / scale ** 2)
         f = compute(image, ravel=False)
         for row in range(0, f.shape[0] - CELLS, cur_cell_skip):
             for col in range(0, f.shape[1] - CELLS, cur_cell_skip):
