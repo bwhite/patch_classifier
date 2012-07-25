@@ -1,7 +1,9 @@
 import vision_data
 import cv2
+import numpy as np
 
-for z, (x, y) in enumerate(vision_data.LabelMe().object_rec_boxes(objects=['person', 'people', 'human', 'man',
-                                                                           'woman', 'pedestrian', 'boy', 'girl', 'baby', 'kid'])):
+for z, (x, y) in enumerate(vision_data.LabelMe().object_rec_boxes(objects=['blurry', 'blur'])):
+    if np.min(y.shape[:2]) < 50:
+        continue
     print(z)
-    cv2.imwrite('/home/brandyn/playground/aladdin_data_cropped/person/1/labelme-%.5d-%s.png' % (z, x), y)
+    cv2.imwrite('labelme-%.5d-%s.png' % (z, x), y)
