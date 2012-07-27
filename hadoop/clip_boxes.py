@@ -57,7 +57,7 @@ class Mapper(object):
                         yield fn, feature.compute_patch(image_box)
                     elif self.type == 'box':
                         image2 = image.copy()
-                        cv2.rectangle(image2, (box[1], box[0]), (box[3], box[2]), (0, 255, 0), 10)
+                        cv2.rectangle(image2, (box[1], box[0]), (box[3], box[2]), (0, 255, 0), 4)
                         yield fn, imfeat.image_tostring(image2, 'jpg')
                     else:
                         raise ValueError(self.type)

@@ -125,12 +125,12 @@ def initial_train(hdfs_input, hdfs_output):
     hadoopy.launch_frozen(hdfs_output + 'pos_sample0', hdfs_output + 'pos_sample', 'split.py', num_reducers=100, remove_output=True)
     # Randomly sample negatives to produce a set that all exemplars will use initially
     hadoopy.launch_frozen(hdfs_output + 'neg', hdfs_output + 'neg_sample', 'random_uniform.py',
-                          cmdenvs=['SAMPLE_SIZE=100000'], remove_output=True)
+                          cmdenvs=['SAMPLE_SIZE=10000'], remove_output=True)
     # Train initial classifiers and serialize them
     with open('neg_feats.pkl', 'w') as fp:
         pickle.dump(np.vstack([x[1].ravel() for x in hadoopy.readtb(hdfs_output + 'neg_sample')]),
                     fp, -1)
-    hadoopy.launch_frozen(hdfs_output + 'pos_sample', hdfs_output + 'exemplars-0', 'train_exemplars.py', cmdenvs=['NEG_FEATS=neg_feats.pkl'], remove_output=True)
+    hadoopy.launch_frozen(hdfs_output + 'pos_sample', hdfs_output + 'exemplars-0', 'train_exemplars.py', cmdenvs=['NEG_FEATS=neg_feats.pkl'], remove_output=True, files=['neg_feats.pkl'])
     exemplar_out = sorted(hadoopy.readtb(hdfs_output + 'exemplars-0'), key=lambda x: x[0])
     with open('exemplars.pkl', 'w') as fp:
         pickle.dump(exemplar_out, fp, -1)
@@ -154,7 +154,7 @@ def hard_train(hdfs_input, hdfs_output):
     hadoopy.launch_frozen(hdfs_input + '0-tr', hdfs_output + 'hard_neg_clip', 'clip_boxes.py', files=['image_box_fns.pkl'], remove_output=True, cmdenvs=['TYPE=feature'])
     hadoopy.launch_frozen([hdfs_output + 'pos_sample',
                            hdfs_output + 'hard_neg_clip'], hdfs_output + 'exemplars-1', 'train_exemplars_hard.py',
-                          cmdenvs=['NEG_FEATS=neg_feats.pkl', 'MAX_HARD=200'],
+                          cmdenvs=['NEG_FEATS=neg_feats.pkl', 'MAX_HARD=200'], files=['neg_feats.pkl'],
                           remove_output=True, num_reducers=10)
     exemplar_out = sorted(hadoopy.readtb(hdfs_output + 'exemplars-1'), key=lambda x: x[0])
     with open('exemplars.pkl', 'w') as fp:
@@ -163,8 +163,8 @@ def hard_train(hdfs_input, hdfs_output):
 
 def calibrate(hdfs_input, hdfs_output):
     # Predict on pos/neg sets
-    hadoopy.launch_frozen(hdfs_input + '1-v', hdfs_output + 'val_pos', 'image_predict.py', cmdenvs=['EXEMPLARS=exemplars.pkl'], remove_output=True, num_reducers=10, files=['exemplars.pkl'])
-    hadoopy.launch_frozen(hdfs_input + '0-v', hdfs_output + 'val_neg', 'image_predict.py', cmdenvs=['EXEMPLARS=exemplars.pkl'], remove_output=True, num_reducers=10, files=['exemplars.pkl'])
+    hadoopy.launch_frozen(hdfs_input + '1-v', hdfs_output + 'val_pos', 'image_predict.py', cmdenvs=['EXEMPLARS=exemplars.pkl', 'CELL_SKIP=16'], remove_output=True, num_reducers=10, files=['exemplars.pkl'])
+    hadoopy.launch_frozen(hdfs_input + '0-v', hdfs_output + 'val_neg', 'image_predict.py', cmdenvs=['EXEMPLARS=exemplars.pkl', 'CELL_SKIP=2'], remove_output=True, num_reducers=10, files=['exemplars.pkl'])
     # Calibrate threshold using pos/neg validation set #1
     hadoopy.launch_frozen([hdfs_output + 'val_neg', hdfs_output + 'val_pos', hdfs_output + 'exemplars-1'], hdfs_output + 'exemplars-2', 'calibrate_thresholds.py', num_reducers=100, remove_output=True)
     exemplar_out = sorted(hadoopy.readtb(hdfs_output + 'exemplars-2'), key=lambda x: x[0])
@@ -172,24 +172,25 @@ def calibrate(hdfs_input, hdfs_output):
         pickle.dump(exemplar_out, fp, -1)
 
 
-def output_exemplars(hdfs_input, hdfs_output):
+def output_exemplars(hdfs_input, hdfs_output, num=2):
     with open('image_box_fns.pkl', 'w') as fp:
         image_box_fns = {}
-        for (image_id, box, score), _ in hadoopy.readtb(hdfs_output + 'exemplars-2'):
+        for (image_id, box, score), _ in hadoopy.readtb(hdfs_output + 'exemplars-%d' % num):
             image_box_fns.setdefault(image_id, []).append((box, 'exemplar-%.5d-%s-%s.png' % (score, image_id, box)))
         pickle.dump(image_box_fns, fp, -1)
-    hadoopy.launch_frozen(hdfs_input + '1-tr', hdfs_output + 'exemplars-1-clip', 'clip_boxes.py', files=['image_box_fns.pkl'], remove_output=True, cmdenvs=['TYPE=box'])
+    hadoopy.launch_frozen(hdfs_input + '1-tr', hdfs_output + 'exemplars-%d-clip' % num, 'clip_boxes.py', files=['image_box_fns.pkl'], remove_output=True, cmdenvs=['TYPE=box'])
     try:
         shutil.rmtree('exemplars')
     except OSError:
         pass
     os.makedirs('exemplars')
-    for x, y in hadoopy.readtb(hdfs_output + 'exemplars-1-clip'):
+    for x, y in hadoopy.readtb(hdfs_output + 'exemplars-%d-clip' % num):
         open('exemplars/%s' % (x,), 'w').write(y)
 
 
 def cluster(hdfs_input, hdfs_output):
     hadoopy.launch_frozen(hdfs_input + '1-v', hdfs_output + 'val_pred_pos', 'predict_spatial_pyramid.py', cmdenvs=['EXEMPLARS=exemplars.pkl'], remove_output=True, files=['exemplars.pkl'], num_reducers=50)
+    toggle_launch()
     with open('labels.pkl', 'w') as fp:
         pickle.dump(list(hadoopy_helper.jobs.unique_keys(hdfs_output + 'val_pred_pos')), fp, -1)
     picarus.classify.run_compute_kernels(hdfs_output + 'val_pred_pos', hdfs_output + 'val_pred_pos_kern', 'labels.pkl', 'labels.pkl', remove_output=True, num_reducers=20, jobconfs=['mapred.child.java.opts=-Xmx256M'], cols_per_chunk=500)
@@ -197,7 +198,9 @@ def cluster(hdfs_input, hdfs_output):
 
 
 def workflow(hdfs_input, hdfs_output):
+    toggle_launch()
     initial_train(hdfs_input, hdfs_output)
+    output_exemplars(hdfs_input, hdfs_output, 0)
     hard_train(hdfs_input, hdfs_output)
     calibrate(hdfs_input, hdfs_output)
     output_exemplars(hdfs_input, hdfs_output)
@@ -214,20 +217,18 @@ def workflow(hdfs_input, hdfs_output):
 
 
 def exemplar_boxes(hdfs_input, hdfs_output):
-    exemplar_name = 'a2bcdfa40fc25f4104899f7e84fc9667-[0.0821917808219178, 0.38961038961038963, 0.1506849315068493, 0.5194805194805195]'
-    #exemplar_name = '61471dbbb05b7380f84994ba81e24fe2-[0.0, 0.0, 0.20618556701030927, 0.6779661016949152]'
-    #exemplar_name = '6c140327d841f9546a957cfca5d5b557-[0.24615384615384617, 0.0, 0.4512820512820513, 0.38461538461538464]'
+    exemplar_name = 'e05c099586f744a6d9e70b334e79da08-[0.5217391304347826, 0.0, 0.8695652173913043, 0.9523809523809523]'
     st = time.time()
     exemplar_out = hadoopy.abspath(hdfs_output + 'exemplar_boxes/%s' % st) + '/'
     for kv in hadoopy.readtb(hdfs_output + 'exemplars-2'):
         (image_id, box, score), _ = kv
         if exemplar_name == '%s-%s' % (image_id, box):
             print('Found it')
-            hadoopy.writetb(exemplar_out + 'exemplar', [kv])
-            break
-    hadoopy.launch_frozen(hdfs_input + '1-v', exemplar_out + 'val_pos', 'hard_predictions.py', cmdenvs=['EXEMPLARS=exemplars.pkl', 'MAX_HARD=200', 'OUTPUT_FORMAT=score_image_box'], files=['exemplars.pkl'],
+            with open('exemplars-patch.pkl', 'w') as fp:
+                pickle.dump([kv], fp, -1)
+    hadoopy.launch_frozen(hdfs_input + '1-v', exemplar_out + 'val_pos', 'hard_predictions.py', cmdenvs=['EXEMPLARS=exemplars-patch.pkl', 'MAX_HARD=100', 'OUTPUT_FORMAT=score_image_box'], files=['exemplars-patch.pkl'],
                           num_reducers=10)
-    hadoopy.launch_frozen(hdfs_input + '0-v', exemplar_out + 'val_neg', 'hard_predictions.py', cmdenvs=['EXEMPLARS=exemplars.pkl', 'MAX_HARD=200', 'OUTPUT_FORMAT=score_image_box'], files=['exemplars.pkl'],
+    hadoopy.launch_frozen(hdfs_input + '0-v', exemplar_out + 'val_neg', 'hard_predictions.py', cmdenvs=['EXEMPLARS=exemplars-patch.pkl', 'MAX_HARD=100', 'OUTPUT_FORMAT=score_image_box'], files=['exemplars-patch.pkl'],
                           num_reducers=10)
     with open('image_box_fns.pkl', 'w') as fp:
         image_box_fns = {}
@@ -236,8 +237,12 @@ def exemplar_boxes(hdfs_input, hdfs_output):
         for num, (score, image_id, box, pol) in enumerate(sorted(pos_boxes + neg_boxes, reverse=True)):
             image_box_fns.setdefault(image_id, []).append((box, 'exemplar-%.5d-%d-%f.png' % (num, pol, score)))
         pickle.dump(image_box_fns, fp, -1)
-    hadoopy.launch_frozen([hdfs_input + '1-v', hdfs_input + '0-v'], exemplar_out + 'boxes', 'clip_boxes.py', files=['image_box_fns.pkl'], remove_output=True)
-    out_dir = 'exemplar-%s/' % st
+    hadoopy.launch_frozen([hdfs_input + '1-v', hdfs_input + '0-v'], exemplar_out + 'boxes', 'clip_boxes.py', files=['image_box_fns.pkl'], remove_output=True, cmdenvs={'TYPE': 'box'})
+    out_dir = 'exemplars_similar/'
+    try:
+        shutil.rmtree('exemplars_similar')
+    except OSError:
+        pass
     os.makedirs(out_dir)
     for x, y in hadoopy.readtb(exemplar_out + 'boxes'):
         open(out_dir + x, 'w').write(y)
@@ -252,7 +257,7 @@ def main():
     random.shuffle(pos_local_inputs)
     print(len(neg_local_inputs))
     print(len(pos_local_inputs))
-    train_ind = int(.25 * len(neg_local_inputs))
+    train_ind = int(.5 * len(neg_local_inputs))
     #setup_data(neg_local_inputs[:train_ind], hdfs_input + '0-tr')
     #setup_data(neg_local_inputs[train_ind:], hdfs_input + '0-v')
     #setup_data(pos_local_inputs[:train_ind], hdfs_input + '1-tr')
@@ -260,6 +265,7 @@ def main():
     hdfs_output = 'exemplarbank/output/%s/' % '1341790878.92'  # time.time()
     #exemplar_boxes(hdfs_input, hdfs_output)
     workflow(hdfs_input, hdfs_output)
+    #output_exemplars(hdfs_input, hdfs_output, 0)
 
 
 if __name__ == '__main__':

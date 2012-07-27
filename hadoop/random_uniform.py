@@ -53,6 +53,13 @@ class LeakyPriorityQueue(object):
     def items(self):
         return self._key_values.iteritems()
 
+    def items_sorted(self):
+        for x in self._sorted_keys:
+            try:
+                yield x, self._key_values[x]
+            except KeyError:
+                pass
+
     def values(self):
         return self._key_values.itervalues()
 

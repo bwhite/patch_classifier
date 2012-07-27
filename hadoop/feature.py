@@ -1,11 +1,12 @@
 import imfeat
 import cv2
 import numpy as np
-
+import os
 
 PATCH_SIZE = 40
 CELLS = 8
 SBIN = 4
+CELL_SKIP = int(os.environ.get('CELL_SKIP', '8'))
 compute = imfeat.HOGLatent(sbin=SBIN, blocks=1)
 
 
@@ -47,7 +48,7 @@ def image_patch_features_random(image, density=1, **kw):
     return _image_patch_features_base(image, _inner, **kw)
 
 
-def image_patch_features_dense(image, cell_skip=32, **kw):
+def image_patch_features_dense(image, cell_skip=CELL_SKIP, **kw):
 
     def _inner(image, scale):
         cur_cell_skip = max(1, cell_skip / scale ** 2)

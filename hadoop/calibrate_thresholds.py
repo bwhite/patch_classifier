@@ -97,4 +97,4 @@ class Reducer(object):
         
 
 if __name__ == '__main__':
-    hadoopy.run(Mapper, Reducer)
+    hadoopy.run(Mapper, Reducer, jobconfs=['mapred.task.timeout=6000000'])
