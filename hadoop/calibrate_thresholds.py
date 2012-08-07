@@ -45,7 +45,7 @@ def compute_fpr_tpr(preds, gts):
     return fpr, tpr
 
 
-def fpr_threshold(p, n, target=.0001, k=200):
+def fpr_threshold(p, n, target=.00001, k=200):
     p = np.asfarray(p)
     n = np.asfarray(n)
     print('|p|=%d |n|=%d' % (p.size, n.size))
@@ -97,4 +97,4 @@ class Reducer(object):
         
 
 if __name__ == '__main__':
-    hadoopy.run(Mapper, Reducer, jobconfs=['mapred.task.timeout=6000000'])
+    hadoopy.run(Mapper, Reducer, jobconfs=['mapred.task.timeout=6000000', 'mapred.child.java.opts=-Xmx512M'])

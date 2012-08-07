@@ -8,6 +8,15 @@ import cv2
 import cPickle as pickle
 
 
+def resize(image, max_side=512):
+    if np.max(image.shape[:2]) > max_side:
+        height, width = (max_side * np.array(image.shape[:2]) / np.max(image.shape[:2])).astype(np.int)
+        print(image.shape)
+        print('Resizing to (%d, %d), from(%s)' % (height, width, image.shape))
+        image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+    return image
+
+
 class Mapper(object):
 
     def __init__(self):
@@ -18,7 +27,7 @@ class Mapper(object):
         print('NumExemplars[%d] Coefs[%s] Intercepts[%s]' % (len(self.ids), self.coefs.shape, self.intercepts.shape))
 
     def map(self, image_id, image_binary):
-        image = imfeat.image_fromstring(image_binary)
+        image = resize(imfeat.image_fromstring(image_binary))
         print(image.shape)
         st = time.time()
         box_num = -1

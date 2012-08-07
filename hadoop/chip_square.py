@@ -16,7 +16,7 @@ def chip_square(chips=None, num_per_side=15, chip_size=40):
 
 import glob
 
-base = 'exemplars-1341862520.6'
+base = 'exemplars_similar_cropped'
 for sz in [11, 21, 41]:
     square = chip_square((cv2.imread(x) for x in sorted(glob.glob(base + '/*'), reverse=True)), sz)
     cv2.imwrite('square-pos-%d.jpg' % sz, square)
